@@ -1,0 +1,6 @@
+<Solution>
+  <Project Path="SanApp.AppHost/SanApp.AppHost.csproj" />
+  <Project Path="SanApp.ServiceDefaults/SanApp.ServiceDefaults.csproj" />
+  <Project Path="SanApp/SanApp.Client/SanApp.Client.csproj" />
+  <Project Path="SanApp/SanApp/SanApp.csproj" />
+</Solution>
