@@ -1,6 +1,13 @@
 <Solution>
   <Project Path="SanApp.AppHost/SanApp.AppHost.csproj" />
+  <Project Path="SanApp.Application/SanApp.Application.csproj" />
+  <Project Path="SanApp.Domain/SanApp.Domain.csproj" />
+  <Project Path="SanApp.Infrastructure/SanApp.Infrastructure.csproj" />
   <Project Path="SanApp.ServiceDefaults/SanApp.ServiceDefaults.csproj" />
   <Project Path="SanApp/SanApp.Client/SanApp.Client.csproj" />
   <Project Path="SanApp/SanApp/SanApp.csproj" />
+  <Project Path="Tests/SanApp.Api.IntegrationTests/SanApp.Api.IntegrationTests.csproj" />
+  <Project Path="Tests/SanApp.Application.Tests/SanApp.Application.Tests.csproj" />
+  <Project Path="Tests/SanApp.Client.Tests/SanApp.Client.Tests.csproj" />
+  <Project Path="Tests/SanApp.Domain.Tests/SanApp.Domain.Tests.csproj" />
 </Solution>

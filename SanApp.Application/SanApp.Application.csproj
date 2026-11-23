@@ -1,0 +1,16 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net11.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\SanApp.Domain\SanApp.Domain.csproj" />
+    <PackageReference Include="Cortex.Mediator" Version="3.1.2" />
+    <PackageReference Include="Cortex.Mediator.Behaviors.FluentValidation" Version="3.1.2" />
+    <PackageReference Include="FluentValidation" Version="12.2.0" />
+  </ItemGroup>
+
+</Project>

@@ -32,4 +32,4 @@
 ## Notes
 
 - Statusregel: Nach dem ersten Erreichen von „Geplant“ ist kein Rückwechsel erlaubt; „Abgeschlossen“ und „Abgesagt“ sind Endzustände.
-- Helfer sehen „Abgesagt“ nicht. Die technischen Architektur- und Framework-Vorgaben sind enthalten, weil sie vom User und der Constitution verbindlich vorgegeben sind.
+- Benutzer ausschließlich mit der Rolle Helfer sehen „Abgesagt“ nicht; bei Mehrfachrollen gelten die vereinigten Rechte. Die technischen Architektur- und Framework-Vorgaben sind enthalten, weil sie vom User und der Constitution verbindlich vorgegeben sind.
