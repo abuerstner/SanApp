@@ -106,6 +106,125 @@ public sealed class DatabaseStartupTests
     }
 
     [Fact]
+    public async Task InterruptedMigrationRemainsPendingAcrossGateInstancesUntilExplicitRecovery()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        await using var gateDatabase = new PostgreSqlBuilder("postgres:18-alpine")
+            .WithDatabase("sanapp_interrupted_gate")
+            .WithUsername("sanapp")
+            .WithPassword("test-only-password")
+            .Build();
+        await gateDatabase.StartAsync(cancellationToken);
+
+        var firstInstance = new SanApp.Infrastructure.Migrations.MigrationGate(gateDatabase.GetConnectionString());
+        await Assert.ThrowsAsync<OperationCanceledException>(() => firstInstance.ApplyMigrationsAsync(
+            _ => throw new OperationCanceledException("simulated process interruption"), cancellationToken));
+
+        var restartedInstance = new SanApp.Infrastructure.Migrations.MigrationGate(gateDatabase.GetConnectionString());
+        await Assert.ThrowsAsync<InvalidOperationException>(() => restartedInstance.EnsureReadyAsync(cancellationToken));
+        await Assert.ThrowsAsync<InvalidOperationException>(() => restartedInstance.ApplyMigrationsAsync(
+            _ => Task.CompletedTask, cancellationToken));
+
+        await restartedInstance.AuthorizeRecoveryAsync(cancellationToken);
+        await restartedInstance.ApplyMigrationsAsync(_ => Task.CompletedTask, cancellationToken);
+        await restartedInstance.EnsureReadyAsync(cancellationToken);
+    }
+
+    [Fact]
+    public async Task MigrationGateSerializesConcurrentInstances()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        await using var gateDatabase = new PostgreSqlBuilder("postgres:18-alpine")
+            .WithDatabase("sanapp_concurrent_gate")
+            .WithUsername("sanapp")
+            .WithPassword("test-only-password")
+            .Build();
+        await gateDatabase.StartAsync(cancellationToken);
+
+        var firstInstance = new SanApp.Infrastructure.Migrations.MigrationGate(gateDatabase.GetConnectionString());
+        var secondInstance = new SanApp.Infrastructure.Migrations.MigrationGate(gateDatabase.GetConnectionString());
+        var firstMigrationStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var releaseFirstMigration = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var secondMigrationStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var activeMigrations = 0;
+        var maximumConcurrentMigrations = 0;
+
+        async Task RunMigrationAsync(bool isFirst)
+        {
+            var active = Interlocked.Increment(ref activeMigrations);
+            while (true)
+            {
+                var maximum = Volatile.Read(ref maximumConcurrentMigrations);
+                if (maximum >= active || Interlocked.CompareExchange(ref maximumConcurrentMigrations, active, maximum) == maximum)
+                {
+                    break;
+                }
+            }
+
+            try
+            {
+                if (isFirst)
+                {
+                    firstMigrationStarted.TrySetResult();
+                    await releaseFirstMigration.Task.WaitAsync(cancellationToken);
+                }
+                else
+                {
+                    secondMigrationStarted.TrySetResult();
+                }
+            }
+            finally
+            {
+                Interlocked.Decrement(ref activeMigrations);
+            }
+        }
+
+        var firstTask = firstInstance.ApplyMigrationsAsync(_ => RunMigrationAsync(isFirst: true), cancellationToken);
+        await firstMigrationStarted.Task.WaitAsync(cancellationToken);
+        var secondTask = secondInstance.ApplyMigrationsAsync(_ => RunMigrationAsync(isFirst: false), cancellationToken);
+        try
+        {
+            await Assert.ThrowsAsync<TimeoutException>(() => secondMigrationStarted.Task.WaitAsync(TimeSpan.FromMilliseconds(200)));
+        }
+        finally
+        {
+            releaseFirstMigration.TrySetResult();
+        }
+
+        await Task.WhenAll(firstTask, secondTask);
+        Assert.Equal(1, maximumConcurrentMigrations);
+        Assert.True(secondMigrationStarted.Task.IsCompleted);
+    }
+
+    [Fact]
+    public async Task UnavailableMigrationGatePreventsStartupAndMigrationExecution()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var connectionString = new NpgsqlConnectionStringBuilder
+        {
+            Host = "127.0.0.1",
+            Port = 1,
+            Database = "unavailable_gate",
+            Username = "unavailable",
+            Password = "unavailable",
+            Timeout = 1,
+            CommandTimeout = 1
+        }.ConnectionString;
+        var gate = new SanApp.Infrastructure.Migrations.MigrationGate(connectionString);
+        var migrationExecuted = false;
+
+        await Assert.ThrowsAsync<NpgsqlException>(() => gate.EnsureReadyAsync(cancellationToken));
+        await Assert.ThrowsAsync<NpgsqlException>(() => gate.ApplyMigrationsAsync(
+            _ =>
+            {
+                migrationExecuted = true;
+                return Task.CompletedTask;
+            }, cancellationToken));
+
+        Assert.False(migrationExecuted);
+    }
+
+    [Fact]
     public async Task MigrationGateUsesAnIndependentPostgreSqlDatabase()
     {
         var cancellationToken = TestContext.Current.CancellationToken;

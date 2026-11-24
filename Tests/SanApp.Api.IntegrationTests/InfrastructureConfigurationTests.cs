@@ -15,6 +15,10 @@ public sealed class InfrastructureConfigurationTests
                 ["ConnectionStrings:sanapp"] = "Host=postgres;Port=5432;Database=sanapp;Username=app;Password=test",
                 ["ConnectionStrings:sanapp-migration-gate"] = "Host=postgres;Port=5432;Database=sanapp-gate;Username=gate;Password=test"
             })
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["Identity:PasswordRecovery:RateLimitKey"] = Convert.ToBase64String(new byte[32])
+            })
             .Build();
 
         var error = Assert.Throws<InvalidOperationException>(

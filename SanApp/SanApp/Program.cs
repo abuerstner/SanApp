@@ -1,3 +1,4 @@
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using SanApp.Api;
@@ -5,6 +6,7 @@ using SanApp.Application;
 using SanApp.Client.Pages;
 using SanApp.Components;
 using SanApp.Infrastructure;
+using SanApp.Infrastructure.Identity;
 using SanApp.Infrastructure.Migrations;
 using SanApp.Infrastructure.Persistence;
 using SanApp.Client.Services;
@@ -21,9 +23,13 @@ var builderArgs = args
     .Where(argument => argument is not "--authorize-migration-recovery" and not "--migrate-database")
     .ToArray();
 var builder = WebApplication.CreateBuilder(builderArgs);
+builder.Logging.AddFilter("Microsoft.AspNetCore.Hosting.Diagnostics", LogLevel.None);
 builder.Services.AddApplication();
 builder.Services.AddInfrastructure(builder.Configuration);
 builder.Services.AddApplicationSecurity();
+builder.Services.AddScoped<IAuthorizationHandler, CurrentSecurityStampAuthorizationHandler>();
+builder.Services.AddScoped<IAuthorizationHandler, CurrentRolesAuthorizationHandler>();
+builder.Services.AddCascadingAuthenticationState();
 builder.Services.AddScoped<ApiClient>();
 
 // Add services to the container.
@@ -66,6 +72,13 @@ else
     await migrationGate.EnsureReadyAsync();
 }
 
+await using (var scope = app.Services.CreateAsyncScope())
+{
+    await scope.ServiceProvider
+        .GetRequiredService<IdentityBootstrapper>()
+        .EnsureInitialAdministratorAsync();
+}
+
 // Configure the HTTP request pipeline.
 app.UseValidationProblemDetails();
 app.UseAuthentication();
@@ -81,6 +94,9 @@ app.UseStatusCodePagesWithReExecute("/not-found", createScopeForStatusCodePages:
 app.UseHttpsRedirection();
 
 app.MapAntiforgeryTokenEndpoint();
+app.MapAccountEndpoints();
+app.MapUsersEndpoints();
+app.MapSessionDraftEndpoints();
 app.MapStaticAssets();
 app.MapRazorComponents<App>()
     .AddInteractiveServerRenderMode()

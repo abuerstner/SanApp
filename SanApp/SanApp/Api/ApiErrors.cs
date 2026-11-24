@@ -4,6 +4,8 @@ using Microsoft.AspNetCore.Authentication.Cookies;
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.Logging;
 using SanApp.Domain.Events;
+using SanApp.Application.Drafts;
+using SanApp.Infrastructure.Identity;
 
 namespace SanApp.Api;
 
@@ -33,6 +35,57 @@ public static class ApiErrors
                     ? StatusCodes.Status409Conflict
                     : StatusCodes.Status400BadRequest;
                 await WriteProblemAsync(context, statusCode, exception.Message);
+            }
+            catch (DraftConflictException exception)
+                when (context.Request.Path.StartsWithSegments("/api"))
+            {
+                var statusCode = exception.Code switch
+                {
+                    "FORM_FORBIDDEN" => StatusCodes.Status403Forbidden,
+                    "DRAFT_NOT_FOUND" => StatusCodes.Status404NotFound,
+                    "DRAFT_EXPIRED" => StatusCodes.Status410Gone,
+                    _ => StatusCodes.Status409Conflict
+                };
+                var title = exception.Code switch
+                {
+                    "FORM_FORBIDDEN" => "Sie haben für diese Aktion keine Berechtigung.",
+                    "DRAFT_NOT_FOUND" => "Der Formularentwurf wurde nicht gefunden.",
+                    "DRAFT_EXPIRED" => "Der Formularentwurf ist abgelaufen. Beginnen Sie mit einem leeren Formular.",
+                    "STALE_DRAFT_VERSION" => "Der Formularentwurf wurde zwischenzeitlich geändert. Laden Sie den aktuellen Stand neu.",
+                    "CREATION_SUCCESS_NOT_PROVEN" => "Der zugehörige Speichervorgang ist nicht nachweislich erfolgreich abgeschlossen.",
+                    _ => "Der Formularentwurf konnte nicht sicher verarbeitet werden."
+                };
+                await Results.Problem(
+                    title: title,
+                    statusCode: statusCode,
+                    extensions: new Dictionary<string, object?> { ["errorCode"] = exception.Code })
+                    .ExecuteAsync(context);
+            }
+            catch (Microsoft.EntityFrameworkCore.DbUpdateConcurrencyException)
+                when (context.Request.Path.StartsWithSegments("/api/formularentwuerfe"))
+            {
+                await Results.Problem(
+                    title: "Der Formularentwurf wurde zwischenzeitlich geändert. Laden Sie den aktuellen Stand neu.",
+                    statusCode: StatusCodes.Status409Conflict,
+                    extensions: new Dictionary<string, object?> { ["errorCode"] = "STALE_DRAFT_VERSION" })
+                    .ExecuteAsync(context);
+            }
+            catch (UserAdministrationConflictException exception)
+                when (context.Request.Path.StartsWithSegments("/api"))
+            {
+                var title = exception.Code switch
+                {
+                    "LAST_ADMINISTRATOR" => "Die letzte Administratorzuweisung kann nicht entfernt werden.",
+                    "STALE_ROLES_VERSION" => "Die Rollen wurden zwischenzeitlich geändert. Laden Sie den aktuellen Stand neu.",
+                    _ => "Die Benutzeränderung steht im Konflikt mit dem aktuellen Datenbestand."
+                };
+                var problem = Results.Problem(
+                    type: "https://www.rfc-editor.org/rfc/rfc9457.html",
+                    title: title,
+                    statusCode: StatusCodes.Status409Conflict,
+                    instance: context.Request.Path,
+                    extensions: new Dictionary<string, object?> { ["errorCode"] = exception.Code });
+                await problem.ExecuteAsync(context);
             }
             catch (OperationCanceledException) when (context.RequestAborted.IsCancellationRequested)
             {

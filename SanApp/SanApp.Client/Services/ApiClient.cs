@@ -98,7 +98,8 @@ public sealed class ApiClient(IJSRuntime javaScript, NavigationManager navigatio
                     response.StatusCode,
                     problem.Title ?? "Die Anfrage konnte nicht verarbeitet werden.",
                     problem.Detail,
-                    problem.Errors);
+                    problem.Errors,
+                    problem.ErrorCode);
             }
         }
         catch (JsonException)
@@ -113,7 +114,8 @@ public sealed class ApiClient(IJSRuntime javaScript, NavigationManager navigatio
     private sealed record ProblemDetailsPayload(
         string? Title,
         string? Detail,
-        IReadOnlyDictionary<string, string[]>? Errors);
+        IReadOnlyDictionary<string, string[]>? Errors,
+        string? ErrorCode);
 }
 
 public sealed record ApiResponse(HttpStatusCode StatusCode, string? ContentType, string Body)
@@ -125,11 +127,13 @@ public sealed class ApiProblemException(
     HttpStatusCode statusCode,
     string title,
     string? detail = null,
-    IReadOnlyDictionary<string, string[]>? errors = null)
+    IReadOnlyDictionary<string, string[]>? errors = null,
+    string? errorCode = null)
     : Exception(title)
 {
     public HttpStatusCode StatusCode { get; } = statusCode;
     public string Title { get; } = title;
     public string? Detail { get; } = detail;
+    public string? ErrorCode { get; } = errorCode;
     public IReadOnlyDictionary<string, string[]> Errors { get; } = errors ?? new Dictionary<string, string[]>();
 }

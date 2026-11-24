@@ -1,5 +1,6 @@
 using Cortex.Mediator.Commands;
 using FluentValidation;
+using SanApp.Application.Operations;
 
 namespace SanApp.Application.Validation;
 
@@ -12,6 +13,11 @@ public sealed class CommandValidationBehavior<TCommand, TResult>(IEnumerable<IVa
         CommandHandlerDelegate<TResult> next,
         CancellationToken cancellationToken)
     {
+        if (command is ICreationOperationReservationRequired)
+        {
+            return await next();
+        }
+
         var failures = new List<FluentValidation.Results.ValidationFailure>();
         foreach (var validator in validators)
         {

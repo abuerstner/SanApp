@@ -1,0 +1,649 @@
+@page "/users"
+@attribute [Microsoft.AspNetCore.Authorization.Authorize(Roles = "Administrator")]
+@using SanApp.Client.Services
+@inject UsersApi UsersApi
+@inject SessionDrafts SessionDrafts
+
+<PageTitle>Benutzerverwaltung</PageTitle>
+
+<MudContainer MaxWidth="MaxWidth.False">
+    <MudText Typo="Typo.h4" id="user-administration-heading">Benutzerverwaltung</MudText>
+
+    <MudPaper Class="pa-4 mt-4" Elevation="1" aria-labelledby="create-user-heading">
+        <MudText Typo="Typo.h5" id="create-user-heading">Benutzerkonto anlegen</MudText>
+        <MudTextField T="string" InputId="new-user-email" Label="E-Mail-Adresse" InputType="InputType.Email" AutoComplete="email" Required="true" Variant="Variant.Outlined" Value="@_newEmail" ValueChanged="OnNewEmailChangedAsync" Disabled="@(!_draftRestoreComplete || _isCreating || _isAcknowledging)" />
+        <fieldset class="mt-3">
+            <legend>Rollen</legend>
+            @foreach (var role in AvailableRoles)
+            {
+                <MudCheckBox T="bool" @key="role" id="@($"new-user-role-{role}")" Label="@role" Value="@_newRoles.Contains(role)" ValueChanged="@((bool selected) => SetNewRoleAsync(role, selected))" Disabled="@(!_draftRestoreComplete || _isCreating || _isAcknowledging)" />
+            }
+        </fieldset>
+        @if (_draftMessage is not null)
+        {
+            <MudAlert Severity="@(_draftMessageIsError ? Severity.Warning : Severity.Info)" Role="@(_draftMessageIsError ? "alert" : "status")" aria-live="polite">@_draftMessage</MudAlert>
+        }
+        <MudButton id="create-user" Variant="Variant.Filled" Color="Color.Primary" Disabled="@(!_draftRestoreComplete || _isCreating || _pendingOperationId is not null || _pendingAcknowledgement is not null)" OnClick="CreateUserAsync">
+            @(_isCreating ? "Wird angelegt …" : "Benutzer anlegen")
+        </MudButton>
+        @if (_createError is not null)
+        {
+            <MudAlert Severity="Severity.Error" Role="alert" aria-live="polite">@_createError</MudAlert>
+        }
+        @if (_createMessage is not null)
+        {
+            <MudAlert Severity="Severity.Success" Role="status" aria-live="polite">@_createMessage</MudAlert>
+        }
+        @if (_pendingOperationId is not null)
+        {
+            <MudText>Vorgangskennung: @_pendingOperationId</MudText>
+            <MudButton Variant="Variant.Outlined" Color="Color.Secondary" Disabled="@_isCheckingStatus" OnClick="CheckCreationStatusAsync">
+                @(_isCheckingStatus ? "Status wird geprüft …" : "Anlagevorgang prüfen")
+            </MudButton>
+        }
+        @if (_pendingAcknowledgement is not null)
+        {
+            <MudButton Variant="Variant.Outlined" Color="Color.Secondary" Disabled="@_isAcknowledging" OnClick="AcknowledgeUserDraftAsync">Entwurfsbestätigung erneut prüfen</MudButton>
+        }
+    </MudPaper>
+
+    <MudPaper Class="pa-4 mt-4" Elevation="1" aria-labelledby="user-list-heading">
+        <MudText Typo="Typo.h5" id="user-list-heading">Benutzerkonten</MudText>
+        @if (_isLoading)
+        {
+            <MudProgressCircular Indeterminate="true" Color="Color.Primary" aria-label="Benutzer werden geladen" />
+            <MudText role="status">Benutzer werden geladen …</MudText>
+        }
+        else if (_loadError is not null)
+        {
+            <MudAlert Severity="Severity.Error" Role="alert">@_loadError</MudAlert>
+            <MudButton Variant="Variant.Outlined" Color="Color.Secondary" OnClick="ReloadUsersAsync">Erneut laden</MudButton>
+        }
+        else if (_users is { Count: 0 })
+        {
+            <MudText>Es sind keine Benutzerkonten vorhanden.</MudText>
+        }
+        else if (_users is not null)
+        {
+            <MudTable T="UserResponse" Items="@_users" Hover="true" Dense="true" Breakpoint="Breakpoint.Sm" aria-label="Benutzerkonten, Rollen und Aktivierungsstatus">
+                <HeaderContent>
+                    <MudTh scope="col">E-Mail</MudTh>
+                    <MudTh scope="col">Rollen</MudTh>
+                    <MudTh scope="col">Aktivierung</MudTh>
+                    <MudTh scope="col">Aktionen</MudTh>
+                </HeaderContent>
+                <RowTemplate>
+                    @{ var roleDraft = GetRoleDraft(context); }
+                    <MudTd DataLabel="E-Mail">@context.Email</MudTd>
+                    <MudTd DataLabel="Rollen">
+                        @foreach (var role in AvailableRoles)
+                        {
+                            <MudCheckBox T="bool" @key="role" id="@($"role-{context.Id}-{role}")" Label="@role" AriaLabel="@($"Rolle {role} für {context.Email}")" Value="@roleDraft.Contains(role)" ValueChanged="@((bool selected) => SetUserRole(context.Id, role, selected))" Disabled="@(_savingRolesUserId is not null)" />
+                        }
+                    </MudTd>
+                    <MudTd DataLabel="Aktivierung">@(context.IsPending ? "Ausstehend" : context.IsActive ? "Aktiviert" : "Unbekannt")</MudTd>
+                    <MudTd DataLabel="Aktionen">
+                        <MudButton id="@($"save-roles-{context.Id}")" Variant="Variant.Filled" Color="Color.Primary" Disabled="@(_savingRolesUserId is not null)" aria-label="@($"Rollen für {context.Email} speichern")" OnClick="@(() => SaveRolesAsync(context))">
+                            @(_savingRolesUserId == context.Id ? "Wird gespeichert …" : "Rollen speichern")
+                        </MudButton>
+                        @if (context.IsPending)
+                        {
+                            <MudButton Variant="Variant.Outlined" Color="Color.Secondary" aria-label="@($"Erstkennwort-Link an {context.Email} erneut senden")" Disabled="@(_sendingUserId is not null)" OnClick="@(() => ResendInvitationAsync(context))">
+                                @(_sendingUserId == context.Id ? "Wird gesendet …" : "Erstkennwort-Link erneut senden")
+                            </MudButton>
+                        }
+                        @if (_messages.TryGetValue(context.Id, out var message))
+                        {
+                            <MudAlert Severity="@(_messageErrors.Contains(context.Id) ? MudBlazor.Severity.Error : MudBlazor.Severity.Info)" Role="@(_messageErrors.Contains(context.Id) ? "alert" : "status")" aria-live="polite">@message</MudAlert>
+                        }
+                        @if (_reloadRequiredUserId == context.Id)
+                        {
+                            <MudButton Variant="Variant.Outlined" Color="Color.Secondary" OnClick="ReloadUsersAsync">Aktuelle Rollen neu laden</MudButton>
+                        }
+                    </MudTd>
+                </RowTemplate>
+            </MudTable>
+        }
+    </MudPaper>
+</MudContainer>
+
+@code {
+    private static readonly string[] AvailableRoles = ["Administrator", "Sandienstverantwortlicher", "Einsatzleitung", "Helfer"];
+    private IReadOnlyList<UserResponse>? _users;
+    private readonly Dictionary<string, HashSet<string>> _roleDrafts = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, string> _messages = new(StringComparer.Ordinal);
+    private readonly HashSet<string> _messageErrors = new(StringComparer.Ordinal);
+    private HashSet<string> _newRoles = new(StringComparer.Ordinal) { "Helfer" };
+    private string _newEmail = string.Empty;
+    private SessionDrafts.DraftSnapshot? _userDraft;
+    private readonly SemaphoreSlim _draftSync = new(1, 1);
+    private string? _draftMessage;
+    private bool _draftMessageIsError;
+    private bool _draftWriteUncertain;
+    private bool _draftRestoreComplete;
+    private string? _sendingUserId;
+    private string? _savingRolesUserId;
+    private string? _reloadRequiredUserId;
+    private string? _loadError;
+    private string? _createError;
+    private string? _createMessage;
+    private Guid? _pendingOperationId;
+    private UserCreationDraftReference? _operationDraft;
+    private (Guid OperationId, UserCreationDraftReference Draft)? _pendingAcknowledgement;
+    private bool _isCreating;
+    private bool _isAcknowledging;
+    private bool _isCheckingStatus;
+    private bool _isLoading = true;
+
+    protected override Task OnInitializedAsync() => ReloadUsersAsync();
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (firstRender)
+        {
+            await RestoreUserDraftAsync();
+        }
+    }
+
+    private async Task ReloadUsersAsync()
+    {
+        _isLoading = true;
+        _loadError = null;
+        try
+        {
+            _users = await UsersApi.GetUsersAsync();
+            _roleDrafts.Clear();
+            foreach (var user in _users)
+            {
+                _roleDrafts[user.Id] = user.Roles.ToHashSet(StringComparer.Ordinal);
+            }
+            _reloadRequiredUserId = null;
+        }
+        catch (ApiProblemException exception)
+        {
+            _loadError = $"Die Benutzer konnten nicht geladen werden: {exception.Title}";
+        }
+        catch (Microsoft.JSInterop.JSException)
+        {
+            _loadError = "Die Benutzer konnten wegen eines Verbindungsfehlers nicht geladen werden.";
+        }
+        finally
+        {
+            _isLoading = false;
+        }
+    }
+
+    private async Task OnNewEmailChangedAsync(string email)
+    {
+        _newEmail = email;
+        await PersistUserDraftAsync();
+    }
+
+    private async Task SetNewRoleAsync(string role, bool selected)
+    {
+        SetRole(_newRoles, role, selected);
+        await PersistUserDraftAsync();
+    }
+
+    private void SetUserRole(string userId, string role, bool selected)
+    {
+        if (_roleDrafts.TryGetValue(userId, out var roles))
+        {
+            SetRole(roles, role, selected);
+        }
+    }
+
+    private static void SetRole(HashSet<string> roles, string role, bool selected)
+    {
+        if (selected)
+        {
+            roles.Add(role);
+        }
+        else
+        {
+            roles.Remove(role);
+        }
+    }
+
+    private async Task RestoreUserDraftAsync()
+    {
+        try
+        {
+            var proof = await SessionDrafts.GetTabDeleteProofAsync();
+            if (proof is null)
+            {
+                return;
+            }
+            if (!Guid.TryParse(proof.DraftId, out var draftId))
+            {
+                _draftWriteUncertain = true;
+                _draftMessage = "Der Entwurfsnachweis ist ungültig. Nicht bestätigte Änderungen können verloren gehen; laden Sie die Seite erneut.";
+                _draftMessageIsError = true;
+                return;
+            }
+
+            var draft = await SessionDrafts.GetAsync(draftId);
+            if (draft is null)
+            {
+                _draftWriteUncertain = true;
+                _draftMessage = "Der Entwurf ist nicht verfügbar. Ob er abgelaufen ist, konnte nicht bestätigt werden; nicht bestätigte Änderungen können verloren gehen.";
+                _draftMessageIsError = true;
+                return;
+            }
+
+            if (!string.Equals(draft.FormType, SessionDrafts.UserCreateFormType, StringComparison.Ordinal))
+            {
+                _draftWriteUncertain = true;
+                _draftMessage = "Ein anderer Formularentwurf ist in diesem Tab hinterlegt und bleibt unverändert. Änderungen an diesem Formular werden nicht als Entwurf gespeichert.";
+                _draftMessageIsError = true;
+                return;
+            }
+
+            _userDraft = draft;
+            _newEmail = draft.Fields.Email ?? string.Empty;
+            _newRoles = draft.Fields.Roles?.ToHashSet(StringComparer.Ordinal) ?? [];
+            _draftMessage = "Der bestätigte Entwurf wurde wiederhergestellt. Zugangsdaten werden nicht gespeichert.";
+            _draftMessageIsError = false;
+        }
+        catch (ApiProblemException exception) when (exception.ErrorCode == "DRAFT_EXPIRED")
+        {
+            _draftWriteUncertain = true;
+            try
+            {
+                await SessionDrafts.ClearTabDeleteProofAsync();
+                _draftWriteUncertain = false;
+                _draftMessage = "Der gespeicherte Entwurf ist abgelaufen und nicht mehr verfügbar. Ein leeres Formular steht bereit.";
+            }
+            catch (Microsoft.JSInterop.JSException)
+            {
+                _draftMessage = "Der Entwurf ist abgelaufen, aber der Tab-Nachweis konnte nicht entfernt werden. Laden Sie die Seite erneut.";
+            }
+            _draftMessageIsError = true;
+        }
+        catch (ApiProblemException)
+        {
+            _draftWriteUncertain = true;
+            _draftMessage = "Der Entwurf konnte nicht geprüft werden. Nicht bestätigte Änderungen können verloren gehen.";
+            _draftMessageIsError = true;
+        }
+        catch (Microsoft.JSInterop.JSException)
+        {
+            _draftWriteUncertain = true;
+            _draftMessage = "Der Entwurf konnte in diesem Tab nicht geprüft werden. Nicht bestätigte Änderungen können verloren gehen.";
+            _draftMessageIsError = true;
+        }
+        finally
+        {
+            _draftRestoreComplete = true;
+            await InvokeAsync(StateHasChanged);
+        }
+    }
+
+    private async Task PersistUserDraftAsync()
+    {
+        if (!_draftRestoreComplete || _draftWriteUncertain)
+        {
+            return;
+        }
+
+        await _draftSync.WaitAsync();
+        try
+        {
+            if (_draftWriteUncertain)
+            {
+                return;
+            }
+
+            var fields = CurrentUserDraftFields();
+            if (_userDraft is null)
+            {
+                _userDraft = await SessionDrafts.CreateAsync(SessionDrafts.UserCreateFormType);
+            }
+
+            if (UserDraftFieldsEqual(fields, _userDraft.Fields))
+            {
+                return;
+            }
+
+            _draftMessage = "Entwurf wird gespeichert …";
+            _draftMessageIsError = false;
+            var updated = await SessionDrafts.UpdateAsync(_userDraft.Id, _userDraft.Version, fields);
+            _userDraft = updated;
+            if (UserDraftFieldsEqual(CurrentUserDraftFields(), updated.Fields))
+            {
+                _draftMessage = "Entwurf auf dem Server bestätigt. Nicht bestätigte Änderungen können verloren gehen.";
+                _draftMessageIsError = false;
+            }
+        }
+        catch (ApiProblemException)
+        {
+            _draftMessage = "Der Entwurf konnte nicht bestätigt werden. Senden Sie die Benutzeranlage nicht erneut; prüfen Sie den Entwurfsstatus durch erneutes Laden.";
+            _draftMessageIsError = true;
+            _draftWriteUncertain = true;
+        }
+        catch (Microsoft.JSInterop.JSException)
+        {
+            _draftMessage = "Der Entwurfsstatus ist unklar. Nicht bestätigte Änderungen können verloren gehen.";
+            _draftMessageIsError = true;
+            _draftWriteUncertain = true;
+        }
+        finally
+        {
+            _draftSync.Release();
+        }
+    }
+
+    private SessionDrafts.DraftFields CurrentUserDraftFields() => new(
+        null, null, null, null, null, null, null,
+        _newEmail,
+        _newRoles.Order(StringComparer.Ordinal).ToArray());
+
+    private static bool UserDraftFieldsEqual(SessionDrafts.DraftFields left, SessionDrafts.DraftFields right) =>
+        string.Equals(left.Email, right.Email, StringComparison.Ordinal)
+        && (left.Roles ?? []).SequenceEqual(right.Roles ?? [], StringComparer.Ordinal);
+
+    private async Task AcknowledgeUserDraftAsync()
+    {
+        if (_pendingAcknowledgement is not { } pending || _isAcknowledging)
+        {
+            return;
+        }
+        _isAcknowledging = true;
+        await InvokeAsync(StateHasChanged);
+        await _draftSync.WaitAsync();
+        try
+        {
+            if (_draftWriteUncertain || _userDraft is null || !UserDraftFieldsEqual(CurrentUserDraftFields(), _userDraft.Fields))
+            {
+                _draftMessage = "Nicht bestätigte Änderungen können verloren gehen. Der Entwurf bleibt erhalten; prüfen Sie die Synchronisation, bevor Sie die Bestätigung wiederholen.";
+                _draftMessageIsError = true;
+                return;
+            }
+            var acknowledgement = await SessionDrafts.AcknowledgeAsync(pending.Draft.Id, pending.Draft.Version, pending.OperationId);
+            if (acknowledgement?.Processed != true)
+            {
+                _draftMessage = "Die Entwurfsbestätigung fehlt oder ist unvollständig. Bitte prüfen Sie sie erneut.";
+                _draftMessageIsError = true;
+                return;
+            }
+            if (acknowledgement.DraftDeleted)
+            {
+                var proof = await SessionDrafts.GetTabDeleteProofAsync();
+                if (proof?.DraftId == pending.Draft.Id.ToString("D"))
+                {
+                    await SessionDrafts.ClearTabDeleteProofAsync();
+                }
+                _userDraft = null;
+                _draftMessage = "Der bestätigte Entwurf wurde gelöscht.";
+            }
+            else
+            {
+                _draftMessage = "Spätere Änderungen bleiben als Entwurf erhalten.";
+            }
+            _draftMessageIsError = false;
+            _pendingAcknowledgement = null;
+        }
+        catch (ApiProblemException)
+        {
+            _draftMessage = "Die Entwurfsbestätigung konnte nicht abgeschlossen werden. Bitte prüfen Sie sie erneut.";
+            _draftMessageIsError = true;
+        }
+        catch (Microsoft.JSInterop.JSException)
+        {
+            _draftMessage = "Das Ergebnis der Entwurfsbestätigung ist unklar. Bitte prüfen Sie es erneut.";
+            _draftMessageIsError = true;
+        }
+        finally
+        {
+            _draftSync.Release();
+            _isAcknowledging = false;
+        }
+    }
+
+    private async Task HandleConfirmedCreationAsync(Guid operationId)
+    {
+        if (_operationDraft is not null)
+        {
+            _pendingAcknowledgement = (operationId, _operationDraft);
+            await AcknowledgeUserDraftAsync();
+        }
+        else if (_userDraft is not null)
+        {
+            _draftMessage = "Der Entwurf bleibt erhalten, da kein bestätigter Entwurfsstand zugeordnet werden konnte.";
+            _draftMessageIsError = true;
+        }
+    }
+
+    private HashSet<string> GetRoleDraft(UserResponse user)
+    {
+        if (!_roleDrafts.TryGetValue(user.Id, out var roles))
+        {
+            roles = user.Roles.ToHashSet(StringComparer.Ordinal);
+            _roleDrafts.Add(user.Id, roles);
+        }
+        return roles;
+    }
+
+    private async Task CreateUserAsync()
+    {
+        _createError = null;
+        _createMessage = null;
+        _pendingOperationId = null;
+        if (string.IsNullOrWhiteSpace(_newEmail))
+        {
+            _createError = "Geben Sie eine E-Mail-Adresse ein.";
+            return;
+        }
+        if (_newRoles.Count == 0)
+        {
+            _createError = "Weisen Sie mindestens eine Rolle zu.";
+            return;
+        }
+
+        var operationId = Guid.NewGuid();
+        _isCreating = true;
+        try
+        {
+            await _draftSync.WaitAsync();
+            try
+            {
+                _operationDraft = !_draftWriteUncertain && _userDraft is not null
+                    && UserDraftFieldsEqual(CurrentUserDraftFields(), _userDraft.Fields)
+                    ? new UserCreationDraftReference(_userDraft.Id, _userDraft.Version)
+                    : null;
+            }
+            finally
+            {
+                _draftSync.Release();
+            }
+            var result = await UsersApi.CreateUserAsync(operationId, _newEmail.Trim(), _newRoles.Order(StringComparer.Ordinal).ToArray(), draft: _operationDraft);
+            if (string.Equals(result.Zustand, "erfolgreich", StringComparison.Ordinal))
+            {
+                ShowCreationResult(result);
+                await HandleConfirmedCreationAsync(operationId);
+                await ReloadUsersAsync();
+            }
+            else
+            {
+                ShowNonSuccessfulCreationStatus(operationId, result.Zustand, result.Fehlercode);
+            }
+        }
+        catch (ApiProblemException exception) when ((int)exception.StatusCode is 400 or 401 or 403 or 409)
+        {
+            _createError = GetProblemMessage(exception);
+        }
+        catch (ApiProblemException)
+        {
+            await CheckCreationStatusAsync(operationId);
+        }
+        catch (Microsoft.JSInterop.JSException)
+        {
+            await CheckCreationStatusAsync(operationId);
+        }
+        finally
+        {
+            _isCreating = false;
+        }
+    }
+
+    private static string GetProblemMessage(ApiProblemException exception)
+    {
+        var validationMessages = exception.Errors.Values.SelectMany(messages => messages).Distinct(StringComparer.Ordinal).ToArray();
+        return validationMessages.Length == 0 ? exception.Title : string.Join(" ", validationMessages);
+    }
+
+    private void ShowCreationResult(CreateUserResponse result)
+    {
+        _pendingOperationId = null;
+        _createError = null;
+        _createMessage = result.InvitationState switch
+        {
+            "versendet" => "Benutzerkonto angelegt. Der Erstkennwort-Link wurde versendet.",
+            "versandFehlgeschlagen" => "Benutzerkonto angelegt; es bleibt gesperrt, weil der Erstkennwort-Link nicht zugestellt wurde.",
+            "nichtErneutGesendet" => "Der Anlagevorgang war bereits abgeschlossen. Es wurde kein weiterer Erstkennwort-Link versendet.",
+            _ => "Die Benutzeranlage wurde bestätigt. Prüfen Sie den Aktivierungsstatus in der Benutzerliste."
+        };
+        if (result.ErrorCode is not null)
+        {
+            _createError = result.ErrorCode == "INVITATION_DELIVERY_FAILED"
+                ? "Der Erstkennwort-Link konnte nicht zugestellt werden; das Konto bleibt gesperrt."
+                : "Das Konto wurde angelegt, aber die Einladung konnte nicht gesendet werden.";
+        }
+    }
+
+    private async Task CheckCreationStatusAsync() 
+    {
+        if (_pendingOperationId is Guid operationId)
+        {
+            await CheckCreationStatusAsync(operationId);
+        }
+    }
+
+    private async Task CheckCreationStatusAsync(Guid operationId)
+    {
+        _pendingOperationId = operationId;
+        _isCheckingStatus = true;
+        _createError = null;
+        try
+        {
+            var status = await UsersApi.GetCreationStatusAsync(operationId);
+            _pendingOperationId = null;
+            switch (status.Zustand)
+            {
+                case "erfolgreich":
+                    _createMessage = "Die Benutzeranlage ist anhand der Vorgangskennung bestätigt. Die Benutzerliste wurde aktualisiert.";
+                    await HandleConfirmedCreationAsync(operationId);
+                    await ReloadUsersAsync();
+                    break;
+                default:
+                    ShowNonSuccessfulCreationStatus(operationId, status.Zustand, status.Fehlercode);
+                    break;
+            }
+        }
+        catch (ApiProblemException exception)
+        {
+            _createError = $"Der Status des Anlagevorgangs konnte nicht bestätigt werden: {exception.Title}";
+        }
+        catch (Microsoft.JSInterop.JSException)
+        {
+            _createError = "Der Status des Anlagevorgangs konnte nicht bestätigt werden. Senden Sie den Vorgang nicht erneut.";
+        }
+        finally
+        {
+            _isCheckingStatus = false;
+        }
+    }
+
+    private void ShowNonSuccessfulCreationStatus(Guid operationId, string? state, string? errorCode)
+    {
+        _createMessage = null;
+        switch (state)
+        {
+            case "abgelehnt":
+                _pendingOperationId = null;
+                _createError = errorCode == "EMAIL_ALREADY_USED"
+                    ? "Die E-Mail-Adresse ist bereits vergeben."
+                    : "Der Anlagevorgang wurde abgelehnt.";
+                break;
+            case "inBearbeitung":
+                _pendingOperationId = operationId;
+                _createError = "Der Anlagevorgang ist nachweislich noch in Bearbeitung. Prüfen Sie den Status erneut, ohne den Vorgang erneut abzusenden.";
+                break;
+            default:
+                _pendingOperationId = operationId;
+                _createError = "Status unklar. Senden Sie den Anlagevorgang nicht erneut; prüfen Sie den Vorgangsstatus später nochmals.";
+                break;
+        }
+    }
+
+    private async Task SaveRolesAsync(UserResponse user)
+    {
+        _messages.Remove(user.Id);
+        _messageErrors.Remove(user.Id);
+        _reloadRequiredUserId = null;
+        var roles = GetRoleDraft(user);
+        if (roles.Count == 0)
+        {
+            _messages[user.Id] = "Ein Benutzerkonto muss mindestens eine Rolle besitzen.";
+            _messageErrors.Add(user.Id);
+            return;
+        }
+
+        _savingRolesUserId = user.Id;
+        try
+        {
+            var updated = await UsersApi.ReplaceRolesAsync(
+                user.Id,
+                user.RolesVersion,
+                roles.Order(StringComparer.Ordinal).ToArray());
+            _users = _users?.Select(item => item.Id == updated.Id ? updated : item).ToArray();
+            _roleDrafts[user.Id] = updated.Roles.ToHashSet(StringComparer.Ordinal);
+            _messages[user.Id] = "Rollen wurden gespeichert.";
+        }
+        catch (ApiProblemException exception)
+        {
+            _messages[user.Id] = exception.Title;
+            _messageErrors.Add(user.Id);
+            if (exception.StatusCode == System.Net.HttpStatusCode.Conflict)
+            {
+                _reloadRequiredUserId = user.Id;
+            }
+        }
+        catch (Microsoft.JSInterop.JSException)
+        {
+            _messages[user.Id] = "Das Ergebnis der Rollenänderung ist unklar. Laden Sie die aktuellen Rollen, bevor Sie erneut speichern.";
+            _messageErrors.Add(user.Id);
+            _reloadRequiredUserId = user.Id;
+        }
+        finally
+        {
+            _savingRolesUserId = null;
+        }
+    }
+
+    private async Task ResendInvitationAsync(UserResponse user)
+    {
+        _messages.Remove(user.Id);
+        _messageErrors.Remove(user.Id);
+        _sendingUserId = user.Id;
+        try
+        {
+            await UsersApi.ResendInitialPasswordLinkAsync(user.Id);
+            _messages[user.Id] = "Der Erstkennwort-Link wurde erneut versendet.";
+        }
+        catch (ApiProblemException exception)
+        {
+            _messages[user.Id] = exception.Title;
+            _messageErrors.Add(user.Id);
+        }
+        catch (Microsoft.JSInterop.JSException)
+        {
+            _messages[user.Id] = "Der Versandstatus ist unklar. Prüfen Sie den Kontostatus, bevor Sie den Erstkennwort-Link erneut senden.";
+            _messageErrors.Add(user.Id);
+        }
+        finally
+        {
+            _sendingUserId = null;
+        }
+    }
+}

@@ -14,6 +14,9 @@ using Microsoft.Extensions.DependencyInjection;
 using SanApp.Api;
 using SanApp.Application;
 using SanApp.Application.Validation;
+using SanApp.Application.Operations;
+using SanApp.Application.Users;
+using Moq;
 using System.Collections.Concurrent;
 
 namespace SanApp.Api.IntegrationTests;
@@ -29,6 +32,52 @@ public sealed class MediatorPipelineTests
             .BuildServiceProvider();
 
         Assert.NotNull(services.GetRequiredService<IMediator>());
+    }
+
+    [Fact]
+    public async Task ApplicationCompositionDispatchesUserCommandAndQueryThroughScannedHandlers()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var administration = new Mock<IUserAdministration>(MockBehavior.Strict);
+        var operationId = Guid.NewGuid();
+        var expectedStatus = new UserCreationStatus(operationId, UserCreationState.Succeeded, "user-1");
+        IReadOnlyList<UserSummary> expectedUsers =
+        [
+            new UserSummary("user-1", "user@example.test", [ApplicationRoles.Helfer], "v1", false)
+        ];
+        administration.Setup(users => users.CreateUserAsync(
+                operationId,
+                "user@example.test",
+                It.Is<IReadOnlyCollection<string>>(roles => roles.SequenceEqual(new[] { ApplicationRoles.Helfer })),
+                cancellationToken))
+            .ReturnsAsync(expectedStatus);
+        administration.Setup(users => users.ListUsersAsync(cancellationToken)).ReturnsAsync(expectedUsers);
+        var operations = new Mock<ICreationOperationStore>(MockBehavior.Strict);
+        operations.Setup(store => store.ReserveAsync(CreationOperationTypes.User, operationId, cancellationToken))
+            .ReturnsAsync(new CreationOperationReservation(
+                true,
+                new CreationOperationStatus(CreationOperationTypes.User, operationId, CreationOperationState.InProgress)));
+
+        using var services = new ServiceCollection()
+            .AddLogging()
+            .AddApplication()
+            .AddSingleton(administration.Object)
+            .AddSingleton(operations.Object)
+            .BuildServiceProvider();
+        var mediator = services.GetRequiredService<IMediator>();
+        var status = await mediator.SendAsync(
+            new CreateUserCommand(operationId, "user@example.test", [ApplicationRoles.Helfer]),
+            cancellationToken);
+        var users = await mediator.QueryAsync(new GetUsersQuery(), cancellationToken);
+
+        Assert.Equal(expectedStatus, status);
+        Assert.Same(expectedUsers, users);
+        administration.VerifyAll();
+        operations.VerifyAll();
+        await Assert.ThrowsAsync<ValidationException>(() => mediator.SendAsync(
+            new CreateUserCommand(Guid.Empty, "user@example.test", [ApplicationRoles.Helfer]),
+            cancellationToken));
+        administration.VerifyNoOtherCalls();
     }
 
     [Fact]

@@ -30,7 +30,7 @@ public sealed class ApiClientTests
     [Fact]
     public async Task SendForJsonAsyncParsesProblemDetailsWithoutLosingFieldErrors()
     {
-        var runtime = new FakeJsRuntime("""{"statusCode":409,"contentType":"application/problem+json","body":"{\"title\":\"Konflikt\",\"detail\":\"Neu laden\",\"errors\":{\"name\":[\"Erforderlich\"]}}"}""");
+        var runtime = new FakeJsRuntime("""{"statusCode":409,"contentType":"application/problem+json","body":"{\"title\":\"Konflikt\",\"detail\":\"Neu laden\",\"errorCode\":\"DRAFT_EXPIRED\",\"errors\":{\"name\":[\"Erforderlich\"]}}"}""");
         var client = CreateClient(runtime);
 
         var exception = await Assert.ThrowsAsync<ApiProblemException>(
@@ -39,6 +39,7 @@ public sealed class ApiClientTests
         Assert.Equal(System.Net.HttpStatusCode.Conflict, exception.StatusCode);
         Assert.Equal("Konflikt", exception.Title);
         Assert.Equal("Neu laden", exception.Detail);
+        Assert.Equal("DRAFT_EXPIRED", exception.ErrorCode);
         Assert.Equal("Erforderlich", Assert.Single(exception.Errors["name"]));
     }
 
